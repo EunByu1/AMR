@@ -1,0 +1,455 @@
+import builtins
+import os
+import random
+from itertools import cycle
+
+import carb.settings
+import omni.client
+import omni.kit.app
+import omni.replicator.core as rep
+import omni.timeline
+import omni.usd
+from omni.isaac.nucleus import get_assets_root_path
+from omni.isaac.core.utils.stage import add_reference_to_stage, create_new_stage
+from pxr import Gf, PhysxSchema, UsdGeom, UsdLux, UsdPhysics
+
+
+
+
+class NavSDGDemo:
+    # Nova Carter라는 자율주행 또는 로봇 차량의 네비게이션 테스트를 위한 USD 파일 경로
+    CARTER_URL = "/Isaac/Samples/Replicator/OmniGraph/nova_carter_nav_only.usd"
+    # Dolly(물리적 상호작용을 할 수 있는 물체)라는 물체의 물리적 모델을 포함하는 USD 파일 경로
+    DOLLY_URL = "/Isaac/Props/Dolly/dolly_physics.usd"
+    
+    # 시뮬레이션에 사용할 소품(props)의 경로 -> 프로젝트에서 필요없을 것 같음 
+    # PROPS_URL = "/Isaac/Props/YCB/Axis_Aligned_Physics"
+    
+    # Nova Carter 차량에 장착된 왼쪽 및 오른쪽 카메라의 경로
+    # 시뮬레이션 중 이 카메라들을 사용해 데이터를 캡처할 수 있음 
+    LEFT_CAMERA_PATH = "/NavWorld/CarterNav/chassis_link/front_hawk/left/camera_left"
+    RIGHT_CAMERA_PATH = "/NavWorld/CarterNav/chassis_link/front_hawk/right/camera_right"
+
+
+
+
+    # 초기화 작업 진행 
+    def __init__(self):
+        # Nova Carter 차량의 섀시(차량의 물리적 움직임과 관련된 요소)에 대한 참조(주소 저장)
+        self._carter_chassis = None
+        # Nova Carter의 네비게이션 타겟(차량이 이동해야 하는 목표 지점)에 대한 참조(주소 저장)
+        self._carter_nav_target = None
+        # 시뮬레이션에서 Dolly 객체에 대한 참조
+        self._dolly = None
+        # Dolly 위에 위치한 조명에 대한 참조 -> 조명을 사용해 환경 설정 
+        self._dolly_light = None
+        # 현재 활성화된 시뮬레이션 스테이지에 대한 참조 
+        self._stage = None
+        # 합성 데이터 생성을 트리거하는 거리 -> 차량이 일정 거리를 이동했을 때 데이터를 캡처하도록 설정
+        self._trigger_distance = 2.0
+        # 생성된 합성 데이터를 디스크에 저장하는 역할을 하는 객체
+        self._writer = None
+        # 생성된 데이터가 저장될 디렉토리 경로
+        self._out_dir = None
+        # 시뮬레이션이 현재 실행 중인지를 나타내는 플래그
+        self._in_running_state = False
+        # 시뮬레이션 타임라인에 대한 참조 -> 타임라인을 통해 시뮬레이션의 프레임이 진행 
+        self._timeline = None
+        # 타임라인 이벤트를 구독하여, 시뮬레이션 중 발생하는 이벤트를 처리
+        self._timeline_sub = None
+        
+        
+        # 시뮬레이션 내에서 사용하는 소품 목록 -> 필요 없을듯 
+        # self._props = []
+        # 시뮬레이션에서 주기적으로 교체될 배경 환경의 URL 리스트 -> 필요 없음 (고정 환경)
+        # self._cycled_env_urls = None
+        # 배경 환경이 변경되는 프레임 간격을 설정하는 변수 -> 필요 없음 (고정 환경 )
+        # self._env_interval = 1
+        # 시뮬레이션 스테이지에서 발생하는 이벤트(예: 스테이지 종료 등)를 구독 -> 팔요 없을 듯 
+        # self._stage_event_sub = None
+        # 시뮬레이션 중 생성된 렌더링 결과물(예: 이미지, 동영상)을 저장하는 리스트 -> 필요 없을 듯 
+        # self._render_products = []
+        # 일시적인 렌더링 결과물을 사용할지 여부를 나타내는 플래그 -> 필요 없을듯 
+        # self._use_temp_rp = False
+        # 시뮬레이션에서 처리할 총 프레임 수를 설정 -> 필요 없을 듯 
+        # self._num_frames = 0
+        # 현재까지 처리된 프레임 수를 추적 -> 필요 없을 듯 
+        # self._frame_counter = 0
+
+
+
+
+    # [추가 Fuction]
+    # dolly 위에 고정된 빨간 조명 설정 
+    def _set_fixed_red_light_on_dolly(self):
+        # Dolly 위에 고정된 빨간 조명 설정
+        if self._dolly_light:
+            self._dolly_light.set_color((1, 0, 0))  # 빨간색 조명 설정 (RGB 값)
+            self._dolly_light.set_intensity(500)  # 조명의 밝기 설정 (필요한 값으로 수정)
+
+
+
+
+    # 시뮬레이션 시작 
+    def start(
+        self,
+        # 시뮬레이션에서 처리할 총 프레임 -> 시뮬레이션 동안 이 프레임 수 만큼의 데이터가 캡처되고 처리 
+        num_frames=10,
+        # 시뮬레이션 결과를 저장할 출력 디렉토리 경로 -> 합성 데이터 저장 (None: 기본값 처리 or 저장 X)
+        out_dir=None,
+                # 임시 렌더링 결과물을 사용할지 여부를 결정하는 플래그(True: 일시적인 데이터 사용 | False: 실시간으로 처리되는 데이터 사용)
+        use_temp_rp=False,
+        
+        
+        # 배경 환경의 URL 리스트 -> 필요 없을 듯 
+        # env_urls=[],
+        # 배경 환경이 변경되는 프레임 간격 
+        # env_interval=3,
+        # 난수 생성의 시드 값을 설정하는 옵션 -> 난수 생성에 의해 결정되는 요소들: Dolly 위치, 조명 설정 등 -> 필요 없을 듯 
+        # seed=None,
+    ):
+        # 시뮬레이션이 시작될 때 콘솔에 "Starting" 메시지를 출력 
+        print(f"[NavSDGDemo] Starting")
+        # 시뮬레이션에서 총 프레임 수를 설정 ->  이 프레임 수만큼의 시뮬레이션이 진행
+        self._num_frames = num_frames
+        # 시뮬레이션 결과를 저장할 출력 디렉토리를 설정 -> out_dir이 지정되지 않으면 현재 작업 디렉토리에 _out_nav_sdg_demo라는 디렉토리를 생성해 데이터를 저장
+        self._out_dir = out_dir if out_dir is not None else os.path.join(os.getcwd(), "_out_nav_sdg_demo")
+        # 임시 렌더링 결과물을 사용할지 여부를 설정 -> use_temp_rp가 True면 임시 결과물을 사용하고, False면 실시간 처리된 데이터를 사용
+        self._use_temp_rp = use_temp_rp
+        # 시뮬레이션이 진행되는 동안 프레임 카운터를 0으로 초기화 -> 시뮬레이션이 얼마나 진행되었는지를 추적 
+        self._frame_counter = 0
+        # 특정 이벤트(예: 데이터 수집)가 발생할 거리 설정 -> 로봇이 Dolly와의 거리가 2.0 이상면 데이터가 수집되거나 특정 이벤트가 발생할 수 있음 
+        self._trigger_distance = 2.0
+        # Dolly 위에 있는 조명의 설정을 무작위로 결정
+        self._randomize_dolly_light()
+        self._set_fixed_red_light_on_dolly()  # 고정된 빨간 조명 설정 메서드 추가 필요
+        # 합성 데이터 생성(SDG)과 관련된 초기 설정을 진행하는 메서드 -> 합성 데이터 생성 준비 함
+        self._setup_sdg()
+        # 시뮬레이션의 타임라인을 설정 -> 타임라인은 시뮬레이션에서 시간이 흐르는 것을 제어하는 중요한 요소로, 각 프레임이 시간에 따라 진행되도록 관리
+        self._timeline = omni.timeline.get_timeline_interface()
+        # 타임라인을 시작하여 시뮬레이션을 진행 -> 이 메서드가 호출되면 시뮬레이션이 시간에 따라 움직임 
+        self._timeline.play()
+        # 타임라인에서 이벤트가 발생할 때마다 이를 처리하는 이벤트 구독을 설정
+        # -> 타임라인에서 특정 시간 또는 프레임이 도달했을 때 이벤트를 처리하는 데 사용
+        self._timeline_sub = self._timeline.get_timeline_event_stream().create_subscription_to_pop_by_type(
+            int(omni.timeline.TimelineEventType.CURRENT_TIME_TICKED), self._on_timeline_event
+        )
+        # 스테이지 종료 이벤트를 구독 -> 시뮬레이션이 종료되거나 스테이지에서 중요한 이벤트가 발생할 때 이를 처리할 수 있도록 설정
+        self._stage_event_sub = (
+            omni.usd.get_context()
+            .get_stage_event_stream()
+            .create_subscription_to_pop_by_type(int(omni.usd.StageEventType.CLOSING), self._on_stage_closing_event)
+        )
+        # 시뮬레이션이 현재 실행 중임을 나타내는 플래그 (True일 때 시뮬레이션이 실행 중임을 의미)
+        self._in_running_state = True
+        
+        
+        # 난수 생성 제어 -> 시뮬레이션 내에서 무작위적인 요소(예: Dolly의 위치, 조명의 설정 등)의 동작을 재현
+        # 필요 없을 듯 
+        '''
+        if seed is not None:
+            random.seed(seed)
+        '''
+        # 소품들의 위치를 무작위로 설정 -> 필요 없을 듯 
+        # self._randomize_prop_poses()
+        # env_urls라는 배경 환경 URL 리스트를 순환할 수 있도록 설정 -> 필요 없을 듯 
+        # self._cycled_env_urls = cycle(env_urls)
+        # 배경 환경이 몇 프레임마다 변경될지를 설정 -> 필요 없을 듯 
+        # self._env_interval = env_interval
+        # Dolly의 위치를 무작위로 설정 -> 필요 없을 듯 
+        # self._randomize_dolly_pose()
+        # 시뮬레이션 환경을 로드하는 메서 -> 배경, 소품, 조명 등을 초기화하는 역할 -> 필요 없을 듯 
+        # 환경과 로봇은 이미 로드된 상태이므로 주석 처리 [O]
+        # self._load_env()
+        
+
+
+
+# 시뮬레이션이 종료되거나 초기화될 때 사용된 자원을 정리하고, 시뮬레이션 상태를 초기화하는 역할 (시뮬레이션 환경을 깨끗하게 리셋)
+    def clear(self):
+        # Nova Carter의 섀시(차체)에 대한 참조를 None으로 설정하여 초기화 
+        self._carter_chassis = None
+        # Nova Carter가 이동할 목표 위치에 대한 참조를 None으로 설정하여 초기화
+        self._carter_nav_target = None
+        # Dolly 객체에 대한 참조를 None으로 설정하여 초기화
+        self._dolly = None
+        # 시뮬레이션 타임라인을 None으로 설정하여 초기화
+        self._timeline = None
+        # 스테이지 이벤트 구독을 해제하는 코드
+        # -> 구독 중이던 이벤트가 있으면 이를 해제하여 메모리 누수를 방지
+        if self._stage_event_sub:
+            self._stage_event_sub.unsubscribe()
+        # 스테이지 이벤트 구독에 대한 참조를 None으로 설정하여 초기화
+        self._stage_event_sub = None
+        # 타임라인 이벤트 구독을 해제하는 코드 
+        # -> 타임라인 이벤트가 구독 중인 경우 이를 해제하여 더 이상 이벤트가 발생하지 않도록 함
+        if self._timeline_sub:
+            self._timeline_sub.unsubscribe()
+        # 타임라인 이벤트 구독에 대한 참조를 None으로 설정하여 초기화
+        self._timeline_sub = None
+        # 합성 데이터 생성(SDG) 중 생성된 렌더링 결과물을 정리하는 메서드
+        # -> 시뮬레이션이 끝난 후 생성된 이미지, 동영상 등의 렌더링 데이터를 정리 
+        self._clear_sdg_render_products()
+        # 시뮬레이션 스테이지에 대한 참조를 None으로 설정하여 초기화
+        self._stage = None
+        # 시뮬레이션이 실행 중인지 여부를 나타내는 플래그를 False로 설정 
+        self._in_running_state = False
+        
+        
+        # 배경 환경 리스트를 비움 -> 필요 없을 듯 
+        # self._cycled_env_urls = None
+        # Dolly 위에 있는 조명에 대한 참조를 None으로 설정하여 초기화 -> 조명은 고정된 상태를 유지할 것 -> 필요 없을 듯
+        # self._dolly_light = None
+        # 프레임 카운터를 0으로 설정하여, 시뮬레이션이 새로 시작될 때 다시 카운트를 시작 -> 필요 없을 듯 
+        # self._frame_counter = 0
+
+
+
+
+# 시뮬레이션이 현재 실행 중인지 여부를 반환 (True: 실행 | False: 종료)
+    def is_running(self):
+        return self._in_running_state
+
+
+
+
+# 스테이지 종료 이벤트가 발생했을 때 실행되는 메서드 
+    def _is_running_in_script_editor(self):
+        return builtins.ISAAC_LAUNCHED_FROM_TERMINAL is True
+
+'''
+# 시뮬레이션에서 스테이지가 종료되거나 종료를 트리거하는 이벤트가 발생하면 이 메서드가 호출 -> 필요 없을듯 
+    def _on_stage_closing_event(self, e: carb.events.IEvent):
+        self.clear()
+'''
+
+
+
+
+    def _load_env(self):
+        # Fresh stage with custom physics scene for Nova Carter's navigation
+        create_new_stage()
+        self._stage = omni.usd.get_context().get_stage()
+        self._add_physics_scene()
+
+        # Environment
+        assets_root_path = get_assets_root_path()
+        add_reference_to_stage(usd_path=assets_root_path + next(self._cycled_env_urls), prim_path="/Environment")
+
+        # Nova Carter
+        add_reference_to_stage(usd_path=assets_root_path + self.CARTER_URL, prim_path="/NavWorld/CarterNav")
+        self._carter_nav_target = self._stage.GetPrimAtPath("/NavWorld/CarterNav/targetXform")
+        self._carter_chassis = self._stage.GetPrimAtPath("/NavWorld/CarterNav/chassis_link")
+
+        # Dolly
+        add_reference_to_stage(usd_path=assets_root_path + self.DOLLY_URL, prim_path="/NavWorld/Dolly")
+        self._dolly = self._stage.GetPrimAtPath("/NavWorld/Dolly")
+        if not self._dolly.GetAttribute("xformOp:translate"):
+            UsdGeom.Xformable(self._dolly).AddTranslateOp()
+        if not self._dolly.GetAttribute("xformOp:rotateXYZ"):
+            UsdGeom.Xformable(self._dolly).AddRotateXYZOp()
+
+        # Light
+        light = UsdLux.SphereLight.Define(self._stage, f"/NavWorld/DollyLight")
+        light.CreateRadiusAttr(0.5)
+        light.CreateIntensityAttr(35000)
+        light.CreateColorAttr(Gf.Vec3f(1.0, 1.0, 1.0))
+        self._dolly_light = light.GetPrim()
+        if not self._dolly_light.GetAttribute("xformOp:translate"):
+            UsdGeom.Xformable(self._dolly_light).AddTranslateOp()
+
+        # Props
+        props_urls = []
+        props_folder_path = assets_root_path + self.PROPS_URL
+        result, entries = omni.client.list(props_folder_path)
+        if result != omni.client.Result.OK:
+            carb.log_error(f"Could not list assets in path: {props_folder_path}")
+            return
+        for entry in entries:
+            _, ext = os.path.splitext(entry.relative_path)
+            if ext == ".usd":
+                props_urls.append(f"{props_folder_path}/{entry.relative_path}")
+
+        cycled_props_url = cycle(props_urls)
+        for i in range(15):
+            prop_url = next(cycled_props_url)
+            prop_name = os.path.splitext(os.path.basename(prop_url))[0]
+            path = f"/NavWorld/Props/Prop_{prop_name}_{i}"
+            prim = self._stage.DefinePrim(path, "Xform")
+            prim.GetReferences().AddReference(prop_url)
+            self._props.append(prim)
+
+    def _add_physics_scene(self):
+        # Physics setup specific for the navigation graph
+        physics_scene = UsdPhysics.Scene.Define(self._stage, "/physicsScene")
+        physx_scene = PhysxSchema.PhysxSceneAPI.Apply(self._stage.GetPrimAtPath("/physicsScene"))
+        physx_scene.GetEnableCCDAttr().Set(True)
+        physx_scene.GetEnableGPUDynamicsAttr().Set(False)
+        physx_scene.GetBroadphaseTypeAttr().Set("MBP")
+
+    def _randomize_dolly_pose(self):
+        min_dist_from_carter = 4
+        carter_loc = self._carter_chassis.GetAttribute("xformOp:translate").Get()
+        for _ in range(100):
+            x, y = random.uniform(-6, 6), random.uniform(-6, 6)
+            dist = (Gf.Vec2f(x, y) - Gf.Vec2f(carter_loc[0], carter_loc[1])).GetLength()
+            if dist > min_dist_from_carter:
+                self._dolly.GetAttribute("xformOp:translate").Set((x, y, 0))
+                self._carter_nav_target.GetAttribute("xformOp:translate").Set((x, y, 0))
+                break
+        self._dolly.GetAttribute("xformOp:rotateXYZ").Set((0, 0, random.uniform(-180, 180)))
+
+    def _randomize_dolly_light(self):
+        dolly_loc = self._dolly.GetAttribute("xformOp:translate").Get()
+        self._dolly_light.GetAttribute("xformOp:translate").Set(dolly_loc + (0, 0, 2.5))
+        self._dolly_light.GetAttribute("inputs:color").Set(
+            (random.uniform(0, 1), random.uniform(0, 1), random.uniform(0, 1))
+        )
+
+    def _randomize_prop_poses(self):
+        spawn_loc = self._dolly.GetAttribute("xformOp:translate").Get()
+        spawn_loc[2] = spawn_loc[2] + 0.5
+        for prop in self._props:
+            prop.GetAttribute("xformOp:translate").Set(spawn_loc + (random.uniform(-1, 1), random.uniform(-1, 1), 0))
+            spawn_loc[2] = spawn_loc[2] + 0.2
+
+    def _setup_sdg(self):
+        # Disable capture on play and async rendering
+        carb.settings.get_settings().set("/omni/replicator/captureOnPlay", False)
+        carb.settings.get_settings().set("/omni/replicator/asyncRendering", False)
+        carb.settings.get_settings().set("/app/asyncRendering", False)
+
+        # Set camera sensors fStop to 0.0 to get well lit sharp images
+        left_camera_prim = self._stage.GetPrimAtPath(self.LEFT_CAMERA_PATH)
+        left_camera_prim.GetAttribute("fStop").Set(0.0)
+        right_camera_prim = self._stage.GetPrimAtPath(self.RIGHT_CAMERA_PATH)
+        right_camera_prim.GetAttribute("fStop").Set(0.0)
+
+        self._writer = rep.WriterRegistry.get("BasicWriter")
+        self._writer.initialize(output_dir=self._out_dir, rgb=True)
+        self._setup_sdg_render_products()
+
+    def _setup_sdg_render_products(self):
+        print(f"[NavSDGDemo] Creating SDG render products")
+        rp_left = rep.create.render_product(
+            self.LEFT_CAMERA_PATH,
+            (1024, 1024),
+            name="left_sensor",
+            force_new=True,
+        )
+        rp_right = rep.create.render_product(
+            self.RIGHT_CAMERA_PATH,
+            (1024, 1024),
+            name="right_sensor",
+            force_new=True,
+        )
+        self._render_products = [rp_left, rp_right]
+        # For better performance the render products can be disabled when not in use, and re-enabled only during SDG
+        if self._use_temp_rp:
+            self._disable_render_products()
+        self._writer.attach(self._render_products)
+        rep.orchestrator.preview()
+
+    def _clear_sdg_render_products(self):
+        print(f"[NavSDGDemo] Clearing SDG render products")
+        if self._writer:
+            self._writer.detach()
+        for rp in self._render_products:
+            rp.destroy()
+        self._render_products.clear()
+        if self._stage.GetPrimAtPath("/Replicator"):
+            omni.kit.commands.execute("DeletePrimsCommand", paths=["/Replicator"])
+
+    def _enable_render_products(self):
+        print(f"[NavSDGDemo] Enabling render products for SDG..")
+        for rp in self._render_products:
+            rp.hydra_texture.set_updates_enabled(True)
+
+    def _disable_render_products(self):
+        print(f"[NavSDGDemo] Disabling render products (enabled only during SDG)..")
+        for rp in self._render_products:
+            rp.hydra_texture.set_updates_enabled(False)
+
+    def _run_sdg(self):
+        if self._use_temp_rp:
+            self._enable_render_products()
+        rep.orchestrator.step(rt_subframes=16, delta_time=0.0)
+        rep.orchestrator.wait_until_complete()
+        if self._use_temp_rp:
+            self._disable_render_products()
+
+    async def _run_sdg_async(self):
+        if self._use_temp_rp:
+            self._enable_render_products()
+        await rep.orchestrator.step_async(rt_subframes=16, delta_time=0.0)
+        await rep.orchestrator.wait_until_complete_async()
+        if self._use_temp_rp:
+            self._disable_render_products()
+
+    def _load_next_env(self):
+        if self._stage.GetPrimAtPath("/Environment"):
+            omni.kit.commands.execute("DeletePrimsCommand", paths=["/Environment"])
+        assets_root_path = get_assets_root_path()
+        add_reference_to_stage(usd_path=assets_root_path + next(self._cycled_env_urls), prim_path="/Environment")
+
+    def _on_sdg_done(self, task):
+        self._setup_next_frame()
+
+    def _setup_next_frame(self):
+        self._frame_counter += 1
+        if self._frame_counter >= self._num_frames:
+            print(f"[NavSDGDemo] Finished")
+            self.clear()
+            return
+        self._randomize_dolly_pose()
+        self._randomize_dolly_light()
+        self._randomize_prop_poses()
+        if self._frame_counter % self._env_interval == 0:
+            self._load_next_env()
+        # Set a new random distance from which to take capture the next frame
+        self._trigger_distance = random.uniform(1.75, 2.5)
+        self._timeline.play()
+        self._timeline_sub = self._timeline.get_timeline_event_stream().create_subscription_to_pop_by_type(
+            int(omni.timeline.TimelineEventType.CURRENT_TIME_TICKED), self._on_timeline_event
+        )
+
+    def _on_timeline_event(self, e: carb.events.IEvent):
+        carter_loc = self._carter_chassis.GetAttribute("xformOp:translate").Get()
+        dolly_loc = self._dolly.GetAttribute("xformOp:translate").Get()
+        dist = (Gf.Vec2f(dolly_loc[0], dolly_loc[1]) - Gf.Vec2f(carter_loc[0], carter_loc[1])).GetLength()
+        if dist < self._trigger_distance:
+            print(f"[NavSDGDemo] Starting SDG for frame no. {self._frame_counter}")
+            self._timeline.pause()
+            self._timeline_sub.unsubscribe()
+            if self._is_running_in_script_editor():
+                import asyncio
+
+                task = asyncio.ensure_future(self._run_sdg_async())
+                task.add_done_callback(self._on_sdg_done)
+            else:
+                self._run_sdg()
+                self._setup_next_frame()
+
+
+ENV_URLS = [
+    
+    "/Isaac/Environments/Grid/default_environment.usd",
+    "/Isaac/Environments/Simple_Warehouse/warehouse.usd",
+    "/Isaac/Environments/Grid/gridroom_black.usd",
+]
+
+
+ENV_INTERVAL = 3
+NUM_FRAMES = 9
+USE_TEMP_RP = True
+
+out_dir = os.path.join(os.getcwd(), "_out_nav_sdg_demo", "")
+nav_demo = NavSDGDemo()
+nav_demo.start(
+    num_frames=NUM_FRAMES,
+    out_dir=out_dir,
+    env_urls=ENV_URLS,
+    env_interval=ENV_INTERVAL,
+    use_temp_rp=USE_TEMP_RP,
+    seed=22,
+)
