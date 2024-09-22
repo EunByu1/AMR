@@ -21,14 +21,14 @@ class NavSDGDemo:
     CARTER_URL = "/Isaac/Samples/Replicator/OmniGraph/nova_carter_nav_only.usd"
     # Dolly(물리적 상호작용을 할 수 있는 물체)라는 물체의 물리적 모델을 포함하는 USD 파일 경로
     DOLLY_URL = "/Isaac/Props/Dolly/dolly_physics.usd"
-    
-    # 시뮬레이션에 사용할 소품(props)의 경로 -> 프로젝트에서 필요없을 것 같음 
-    # PROPS_URL = "/Isaac/Props/YCB/Axis_Aligned_Physics"
-    
     # Nova Carter 차량에 장착된 왼쪽 및 오른쪽 카메라의 경로
     # 시뮬레이션 중 이 카메라들을 사용해 데이터를 캡처할 수 있음 
     LEFT_CAMERA_PATH = "/NavWorld/CarterNav/chassis_link/front_hawk/left/camera_left"
     RIGHT_CAMERA_PATH = "/NavWorld/CarterNav/chassis_link/front_hawk/right/camera_right"
+
+
+    # 시뮬레이션에 사용할 소품(props)의 경로 -> 프로젝트에서 필요없을 것 같음 
+    # PROPS_URL = "/Isaac/Props/YCB/Axis_Aligned_Physics"
 
 
 
@@ -57,6 +57,10 @@ class NavSDGDemo:
         self._timeline = None
         # 타임라인 이벤트를 구독하여, 시뮬레이션 중 발생하는 이벤트를 처리
         self._timeline_sub = None
+        # 시뮬레이션 중 생성된 렌더링 결과물(예: 이미지, 동영상)을 저장하는 리스트 -> 필요 없을 듯 
+        self._render_products = []
+        # 현재까지 처리된 프레임 수를 추적
+        self._frame_counter = 0
         
         
         # 시뮬레이션 내에서 사용하는 소품 목록 -> 필요 없을듯 
@@ -67,25 +71,10 @@ class NavSDGDemo:
         # self._env_interval = 1
         # 시뮬레이션 스테이지에서 발생하는 이벤트(예: 스테이지 종료 등)를 구독 -> 팔요 없을 듯 
         # self._stage_event_sub = None
-        # 시뮬레이션 중 생성된 렌더링 결과물(예: 이미지, 동영상)을 저장하는 리스트 -> 필요 없을 듯 
-        # self._render_products = []
         # 일시적인 렌더링 결과물을 사용할지 여부를 나타내는 플래그 -> 필요 없을듯 
         # self._use_temp_rp = False
         # 시뮬레이션에서 처리할 총 프레임 수를 설정 -> 필요 없을 듯 
         # self._num_frames = 0
-        # 현재까지 처리된 프레임 수를 추적 -> 필요 없을 듯 
-        # self._frame_counter = 0
-
-
-
-
-    # [추가 Fuction]
-    # dolly 위에 고정된 빨간 조명 설정 
-    def _set_fixed_red_light_on_dolly(self):
-        # Dolly 위에 고정된 빨간 조명 설정
-        if self._dolly_light:
-            self._dolly_light.set_color((1, 0, 0))  # 빨간색 조명 설정 (RGB 값)
-            self._dolly_light.set_intensity(500)  # 조명의 밝기 설정 (필요한 값으로 수정)
 
 
 
@@ -97,7 +86,7 @@ class NavSDGDemo:
         num_frames=10,
         # 시뮬레이션 결과를 저장할 출력 디렉토리 경로 -> 합성 데이터 저장 (None: 기본값 처리 or 저장 X)
         out_dir=None,
-                # 임시 렌더링 결과물을 사용할지 여부를 결정하는 플래그(True: 일시적인 데이터 사용 | False: 실시간으로 처리되는 데이터 사용)
+        # 임시 렌더링 결과물을 사용할지 여부를 결정하는 플래그(True: 일시적인 데이터 사용 | False: 실시간으로 처리되는 데이터 사용)
         use_temp_rp=False,
         
         
@@ -121,7 +110,7 @@ class NavSDGDemo:
         # 특정 이벤트(예: 데이터 수집)가 발생할 거리 설정 -> 로봇이 Dolly와의 거리가 2.0 이상면 데이터가 수집되거나 특정 이벤트가 발생할 수 있음 
         self._trigger_distance = 2.0
         # Dolly 위에 있는 조명의 설정을 무작위로 결정
-        self._randomize_dolly_light()
+        # self._randomize_dolly_light()
         self._set_fixed_red_light_on_dolly()  # 고정된 빨간 조명 설정 메서드 추가 필요
         # 합성 데이터 생성(SDG)과 관련된 초기 설정을 진행하는 메서드 -> 합성 데이터 생성 준비 함
         self._setup_sdg()
@@ -165,7 +154,7 @@ class NavSDGDemo:
 
 
 
-# 시뮬레이션이 종료되거나 초기화될 때 사용된 자원을 정리하고, 시뮬레이션 상태를 초기화하는 역할 (시뮬레이션 환경을 깨끗하게 리셋)
+    # 시뮬레이션이 종료되거나 초기화될 때 사용된 자원을 정리하고, 시뮬레이션 상태를 초기화하는 역할 (시뮬레이션 환경을 깨끗하게 리셋)
     def clear(self):
         # Nova Carter의 섀시(차체)에 대한 참조를 None으로 설정하여 초기화 
         self._carter_chassis = None
@@ -194,62 +183,66 @@ class NavSDGDemo:
         self._stage = None
         # 시뮬레이션이 실행 중인지 여부를 나타내는 플래그를 False로 설정 
         self._in_running_state = False
+        # 프레임 카운터를 0으로 설정하여, 시뮬레이션이 새로 시작될 때 다시 카운트를 시작
+        self._frame_counter = 0
         
         
         # 배경 환경 리스트를 비움 -> 필요 없을 듯 
         # self._cycled_env_urls = None
         # Dolly 위에 있는 조명에 대한 참조를 None으로 설정하여 초기화 -> 조명은 고정된 상태를 유지할 것 -> 필요 없을 듯
         # self._dolly_light = None
-        # 프레임 카운터를 0으로 설정하여, 시뮬레이션이 새로 시작될 때 다시 카운트를 시작 -> 필요 없을 듯 
-        # self._frame_counter = 0
 
 
 
 
-# 시뮬레이션이 현재 실행 중인지 여부를 반환 (True: 실행 | False: 종료)
+    # 시뮬레이션이 현재 실행 중인지 여부를 반환 (True: 실행 | False: 종료)
     def is_running(self):
         return self._in_running_state
 
 
 
 
-# 스테이지 종료 이벤트가 발생했을 때 실행되는 메서드 
+    # 스테이지 종료 이벤트가 발생했을 때 실행되는 메서드 
     def _is_running_in_script_editor(self):
         return builtins.ISAAC_LAUNCHED_FROM_TERMINAL is True
 
-'''
-# 시뮬레이션에서 스테이지가 종료되거나 종료를 트리거하는 이벤트가 발생하면 이 메서드가 호출 -> 필요 없을듯 
+
+
+
+    # 시뮬레이션에서 스테이지가 종료되거나 종료를 트리거하는 이벤트가 발생하면 이 메서드가 호출 -> 필요 없을듯 
     def _on_stage_closing_event(self, e: carb.events.IEvent):
         self.clear()
-'''
 
 
 
 
     def _load_env(self):
-        # Fresh stage with custom physics scene for Nova Carter's navigation
+        # 새로운 스테이지 생성 및 Nova Carter의 내비게이션을 위한 커스텀 물리 장면 추가
         create_new_stage()
         self._stage = omni.usd.get_context().get_stage()
         self._add_physics_scene()
 
-        # Environment
-        assets_root_path = get_assets_root_path()
-        add_reference_to_stage(usd_path=assets_root_path + next(self._cycled_env_urls), prim_path="/Environment")
-
-        # Nova Carter
+        # Nova Carter 추가
         add_reference_to_stage(usd_path=assets_root_path + self.CARTER_URL, prim_path="/NavWorld/CarterNav")
         self._carter_nav_target = self._stage.GetPrimAtPath("/NavWorld/CarterNav/targetXform")
         self._carter_chassis = self._stage.GetPrimAtPath("/NavWorld/CarterNav/chassis_link")
 
-        # Dolly
+        # Dolly 추가
         add_reference_to_stage(usd_path=assets_root_path + self.DOLLY_URL, prim_path="/NavWorld/Dolly")
         self._dolly = self._stage.GetPrimAtPath("/NavWorld/Dolly")
+        # Dolly에 위치 및 회전 변환 속성이 없으면 추가
         if not self._dolly.GetAttribute("xformOp:translate"):
             UsdGeom.Xformable(self._dolly).AddTranslateOp()
         if not self._dolly.GetAttribute("xformOp:rotateXYZ"):
             UsdGeom.Xformable(self._dolly).AddRotateXYZOp()
 
-        # Light
+
+        '''
+        # 환경 설정 -> 환경 이미 주어져서 주석 처리 
+        assets_root_path = get_assets_root_path()
+        add_reference_to_stage(usd_path=assets_root_path + next(self._cycled_env_urls), prim_path="/Environment")
+
+        # 조명 설정 -> 주석 처리 
         light = UsdLux.SphereLight.Define(self._stage, f"/NavWorld/DollyLight")
         light.CreateRadiusAttr(0.5)
         light.CreateIntensityAttr(35000)
@@ -258,7 +251,7 @@ class NavSDGDemo:
         if not self._dolly_light.GetAttribute("xformOp:translate"):
             UsdGeom.Xformable(self._dolly_light).AddTranslateOp()
 
-        # Props
+        # Props -> 주석 처리 
         props_urls = []
         props_folder_path = assets_root_path + self.PROPS_URL
         result, entries = omni.client.list(props_folder_path)
@@ -270,6 +263,7 @@ class NavSDGDemo:
             if ext == ".usd":
                 props_urls.append(f"{props_folder_path}/{entry.relative_path}")
 
+        # 소품을 순환하며 스테이지에 추가
         cycled_props_url = cycle(props_urls)
         for i in range(15):
             prop_url = next(cycled_props_url)
@@ -278,178 +272,398 @@ class NavSDGDemo:
             prim = self._stage.DefinePrim(path, "Xform")
             prim.GetReferences().AddReference(prop_url)
             self._props.append(prim)
+        '''
 
+
+
+
+    # 네비게이션 그래프를 위한 물리 시뮬레이션 환경을 설정
     def _add_physics_scene(self):
-        # Physics setup specific for the navigation graph
+        # 네비게이션 그래프에 특화된 물리 설정
         physics_scene = UsdPhysics.Scene.Define(self._stage, "/physicsScene")
+        # PhysX 물리 엔진 설정 적용
         physx_scene = PhysxSchema.PhysxSceneAPI.Apply(self._stage.GetPrimAtPath("/physicsScene"))
+        # 지속 충돌 감지(Continuous Collision Detection) 활성화
         physx_scene.GetEnableCCDAttr().Set(True)
+        # GPU 기반 물리 시뮬레이션 비활성화
         physx_scene.GetEnableGPUDynamicsAttr().Set(False)
+        # 광역 충돌 감지 방식(Broadphase Type)을 'MBP'로 설정
         physx_scene.GetBroadphaseTypeAttr().Set("MBP")
 
+
+
+
+    # [중요 코드]
+    # Dolly(카메라나 장비 운반을 위한 장치)의 위치와 회전 각도를 무작위로 설정
     def _randomize_dolly_pose(self):
+        # Nova Carter와 Dolly 간의 최소 거리 설정 (최소 4 유닛 이상 떨어져야 함)
         min_dist_from_carter = 4
+        # Nova Carter의 현재 위치 가져오기 (차체 위치)
         carter_loc = self._carter_chassis.GetAttribute("xformOp:translate").Get()
-        for _ in range(100):
+
+        # Dolly의 위치를 무작위로 설정, Nova Carter와의 최소 거리를 충족할 때까지 시도
+        for _ in range(100): # 최대 100번의 시도
+            # x, y 좌표를 -6부터 6 사이에서 무작위로 선택
             x, y = random.uniform(-6, 6), random.uniform(-6, 6)
+            # Nova Carter와의 거리 계산
             dist = (Gf.Vec2f(x, y) - Gf.Vec2f(carter_loc[0], carter_loc[1])).GetLength()
+
+            # 설정한 최소 거리보다 크면 위치 설정
             if dist > min_dist_from_carter:
+                # Dolly의 위치 설정
                 self._dolly.GetAttribute("xformOp:translate").Set((x, y, 0))
+                # Nova Carter의 타겟 위치 설정
                 self._carter_nav_target.GetAttribute("xformOp:translate").Set((x, y, 0))
                 break
+
+        # Dolly의 회전 각도를 -180도부터 180도 사이에서 무작위로 설정
         self._dolly.GetAttribute("xformOp:rotateXYZ").Set((0, 0, random.uniform(-180, 180)))
 
+
+
+
+    # Dolly 위에 고정된 빨간색 조명을 설정
+    def _set_fixed_red_light_on_dolly(self):
+        # Dolly의 현재 위치를 가져옴 (Dolly가 고정되어 있으므로 위치도 고정)
+        dolly_loc = self._dolly.GetAttribute("xformOp:translate").Get()
+
+        # Dolly 조명의 위치를 Dolly 위로 2.5 유닛 상단에 고정
+        if self._dolly_light:
+            self._dolly_light.GetAttribute("xformOp:translate").Set(dolly_loc + (0, 0, 2.5))
+            
+            # 빨간색 조명 설정 (RGB 값)
+            self._dolly_light.GetAttribute("inputs:color").Set((1.0, 0.0, 0.0))
+            
+            # 조명의 강도를 500으로 설정
+            self._dolly_light.GetAttribute("inputs:intensity").Set(500)
+
+
+
+
+    # 위에서 "_set_fixed_red_light_on_dolly" 함수 선언함 
+    '''
+    # Dolly에 부착된 조명의 위치와 색상을 무작위로 설정하는 역할
     def _randomize_dolly_light(self):
         dolly_loc = self._dolly.GetAttribute("xformOp:translate").Get()
         self._dolly_light.GetAttribute("xformOp:translate").Set(dolly_loc + (0, 0, 2.5))
         self._dolly_light.GetAttribute("inputs:color").Set(
             (random.uniform(0, 1), random.uniform(0, 1), random.uniform(0, 1))
         )
+    '''
 
+
+
+
+    # 소품(Props)의 위치를 무작위로 설정
+    '''
     def _randomize_prop_poses(self):
         spawn_loc = self._dolly.GetAttribute("xformOp:translate").Get()
         spawn_loc[2] = spawn_loc[2] + 0.5
         for prop in self._props:
             prop.GetAttribute("xformOp:translate").Set(spawn_loc + (random.uniform(-1, 1), random.uniform(-1, 1), 0))
             spawn_loc[2] = spawn_loc[2] + 0.2
+    '''
 
+
+
+
+    # 시뮬레이션 중 데이터 수집을 제어하고, 카메라 이미지를 선명하게 렌더링하며, 합성 데이터(SDG)를 처리하는 데 필요한 모든 설정 처리
     def _setup_sdg(self):
-        # Disable capture on play and async rendering
+        # 시뮬레이션 실행 시 데이터 캡처와 비동기 렌더링을 비활성화
         carb.settings.get_settings().set("/omni/replicator/captureOnPlay", False)
         carb.settings.get_settings().set("/omni/replicator/asyncRendering", False)
         carb.settings.get_settings().set("/app/asyncRendering", False)
 
-        # Set camera sensors fStop to 0.0 to get well lit sharp images
+        # 카메라 센서의 fStop 값을 0.0으로 설정하여 잘 조명된 선명한 이미지 생성
         left_camera_prim = self._stage.GetPrimAtPath(self.LEFT_CAMERA_PATH)
         left_camera_prim.GetAttribute("fStop").Set(0.0)
         right_camera_prim = self._stage.GetPrimAtPath(self.RIGHT_CAMERA_PATH)
         right_camera_prim.GetAttribute("fStop").Set(0.0)
 
+        # # BasicWriter를 사용해 데이터를 저장하는 설정
         self._writer = rep.WriterRegistry.get("BasicWriter")
         self._writer.initialize(output_dir=self._out_dir, rgb=True)
+
+        # 렌더링 결과를 설정하는 메서드 호출
         self._setup_sdg_render_products()
 
-    def _setup_sdg_render_products(self):
-        print(f"[NavSDGDemo] Creating SDG render products")
-        rp_left = rep.create.render_product(
-            self.LEFT_CAMERA_PATH,
-            (1024, 1024),
-            name="left_sensor",
-            force_new=True,
-        )
-        rp_right = rep.create.render_product(
-            self.RIGHT_CAMERA_PATH,
-            (1024, 1024),
-            name="right_sensor",
-            force_new=True,
-        )
-        self._render_products = [rp_left, rp_right]
-        # For better performance the render products can be disabled when not in use, and re-enabled only during SDG
-        if self._use_temp_rp:
-            self._disable_render_products()
-        self._writer.attach(self._render_products)
-        rep.orchestrator.preview()
 
+
+
+    # 왼쪽과 오른쪽 카메라에서의 렌더링 결과를 처리하고, 필요할 때만 렌더링을 활성화
+    def _setup_sdg_render_products(self):
+        # 콘솔에 렌더링 제품을 생성 중이라는 메시지를 출력
+        print(f"[NavSDGDemo] Creating SDG render products")
+
+        # 카메라 경로가 존재하는지 확인
+        left_camera_prim  = self._stage.GetPrimAtPath(self.LEFT_CAMERA_PATH)
+        right_camera_prim = self._stage.GetPrimAtPath(self.RIGHT_CAMERA_PATH)
+        
+        # 카메라가 없을 경우 오류 메시지를 출력하고 렌더링 제품 생성을 건너뜀
+        if not left_camera_prim.IsValid():
+            print(f"[NavSDGDemo] Left camera not found at {self.LEFT_CAMERA_PATH}")
+            return  # 카메라가 없으므로 함수 종료
+        
+        if not right_camera_prim.IsValid():
+            print(f"[NavSDGDemo] Right camera not found at {self.RIGHT_CAMERA_PATH}")
+            return  # 카메라가 없으므로 함수 종료
+
+        # 왼쪽 카메라에서 렌더링 제품 생성
+        rp_left = rep.create.render_product(
+            # 왼쪽 카메라 경로
+            self.LEFT_CAMERA_PATH,
+            # 렌더링 해상도 (1024 x 1024)
+            (1024, 1024),
+            # 렌더링 제품 이름
+            name="left_sensor",
+            # 강제로 새로운 렌더링 제품을 생성
+            force_new=True,
+        )
+        # 오른쪽 카메라에서 렌더링 제품 생성
+        rp_right = rep.create.render_product(
+            # 오른쪽 카메라 경로
+            self.RIGHT_CAMERA_PATH,
+            # 렌더링 해상도 (1024 x 1024)
+            (1024, 1024),
+            # 렌더링 제품 이름
+            name="right_sensor",
+            # 강제로 새로운 렌더링 제품을 생성
+            force_new=True,
+        )
+        # 왼쪽과 오른쪽 카메라의 렌더링 제품을 리스트에 저장
+        self._render_products = [rp_left, rp_right]
+
+        # 성능 향상을 위해 렌더링 제품을 임시로 비활성화할지 여부 확인
+        if self._use_temp_rp:
+            # 임시로 렌더링 제품 비활성화
+            self._disable_render_products()
+        # 렌더링 제품을 Writer에 연결하여 데이터를 저장할 준비를 함    
+        self._writer.attach(self._render_products)
+
+
+        # 시뮬레이션에서 생성된 렌더링 제품을 화면에 표시
+        # 화면 전환없이 데이터 저장만을 원하므로, 필요 없을듯 -> 주석 처리 
+        # rep.orchestrator.preview()
+
+
+
+
+    # 시뮬레이션에서 사용한 렌더링 제품(SDG Render Products)을 정리하고 삭제
     def _clear_sdg_render_products(self):
+        # SDG 렌더링 제품을 정리 중이라는 메시지를 출력
         print(f"[NavSDGDemo] Clearing SDG render products")
+
+        # Writer가 존재할 경우 렌더링 제품과의 연결을 해제
         if self._writer:
+            # Writer에서 모든 렌더링 제품 분리
             self._writer.detach()
+
+        # 렌더링 제품을 순차적으로 제거
         for rp in self._render_products:
+            # 렌더링 제품 객체를 메모리에서 삭제
             rp.destroy()
+
+        # 렌더링 제품 리스트를 비움 -> 리스트를 초기화하여 남은 참조 제거
         self._render_products.clear()
+
+        # Replicator 경로에 해당하는 프림이 존재할 경우 삭제
         if self._stage.GetPrimAtPath("/Replicator"):
             omni.kit.commands.execute("DeletePrimsCommand", paths=["/Replicator"])
 
+
+
+
+    # 렌더링 제품(SDG Render Products)을 활성화
     def _enable_render_products(self):
+        # 렌더링 제품을 활성화 중이라는 메시지를 출력
         print(f"[NavSDGDemo] Enabling render products for SDG..")
+
+        # 렌더링 제품 리스트에서 각각의 제품을 활성화   
         for rp in self._render_products:
+            # 각 렌더링 제품의 Hydra 텍스처 업데이트를 활성화
             rp.hydra_texture.set_updates_enabled(True)
 
+
+
+
+    # 렌더링 제품(SDG Render Products)을 비활성화
     def _disable_render_products(self):
+        # 렌더링 제품 비활성화 중이라는 메시지를 출력
         print(f"[NavSDGDemo] Disabling render products (enabled only during SDG)..")
+
+        # 렌더링 제품 리스트에서 각각의 렌더링 제품을 비활성화
         for rp in self._render_products:
+            # 각 렌더링 제품의 Hydra 텍스처 업데이트를 비활성화
             rp.hydra_texture.set_updates_enabled(False)
 
+
+
+
+    # SDG(Synthetic Data Generation, 합성 데이터 생성)를 수행하는 과정에서 렌더링 제품을 일시적으로 활성화하고, 데이터를 처리한 후 비활성화하는 역할
     def _run_sdg(self):
+        # 임시 렌더링 제품을 사용할 경우 렌더링 제품을 활성화
         if self._use_temp_rp:
+            # 렌더링 제품 활성화
             self._enable_render_products()
+        
+        # 합성 데이터를 생성하는 과정에서 렌더링 제품을 16개의 서브프레임으로 처리 -> 서브프레임 단위로 렌더링 진행
         rep.orchestrator.step(rt_subframes=16, delta_time=0.0)
+        # 렌더링 작업이 완료될 때까지 대기
         rep.orchestrator.wait_until_complete()
+
+        # 임시 렌더링 제품을 사용했을 경우 렌더링 제품을 다시 비활성화
         if self._use_temp_rp:
+            # 렌더링 제품 비활성화
             self._disable_render_products()
 
+
+
+
+    # 비동기 처리(async/await)를 활용하여, 합성 데이터를 생성하는 동안 다른 작업을 병렬로 수행
     async def _run_sdg_async(self):
+        # 임시 렌더링 제품을 사용할 경우 렌더링 제품을 활성화
         if self._use_temp_rp:
             self._enable_render_products()
+
+        # 비동기 방식으로 서브프레임 단위로 합성 데이터 생성
         await rep.orchestrator.step_async(rt_subframes=16, delta_time=0.0)
+        # 렌더링이 완료될 때까지 비동기 방식으로 대기
         await rep.orchestrator.wait_until_complete_async()
+
+        # 렌더링 제품을 다시 비활성화
         if self._use_temp_rp:
             self._disable_render_products()
 
+
+
+
+    # 환경 전환 
+    '''
     def _load_next_env(self):
         if self._stage.GetPrimAtPath("/Environment"):
             omni.kit.commands.execute("DeletePrimsCommand", paths=["/Environment"])
         assets_root_path = get_assets_root_path()
         add_reference_to_stage(usd_path=assets_root_path + next(self._cycled_env_urls), prim_path="/Environment")
+    '''
 
+
+
+
+    # 현재 프레임이 완료되었을 때 호출
     def _on_sdg_done(self, task):
+        # 다음 프레임 설정
         self._setup_next_frame()
 
+    # 다음 프레임 설정
     def _setup_next_frame(self):
+        # 프레임 카운터를 1 증가시킴
         self._frame_counter += 1
+
+        # 프레임 카운터가 설정된 총 프레임 수보다 크거나 같으면 시뮬레이션 종료
         if self._frame_counter >= self._num_frames:
             print(f"[NavSDGDemo] Finished")
             self.clear()
             return
-        self._randomize_dolly_pose()
-        self._randomize_dolly_light()
-        self._randomize_prop_poses()
-        if self._frame_counter % self._env_interval == 0:
-            self._load_next_env()
-        # Set a new random distance from which to take capture the next frame
+
+        # Dolly와의 거리를 무작위로 설정
         self._trigger_distance = random.uniform(1.75, 2.5)
+        # 타임라인을 재생하여 다음 프레임 진행
         self._timeline.play()
         self._timeline_sub = self._timeline.get_timeline_event_stream().create_subscription_to_pop_by_type(
             int(omni.timeline.TimelineEventType.CURRENT_TIME_TICKED), self._on_timeline_event
         )
 
+
+        # Dolly의 위치를 무작위로 설정 -> 환경 고정 필요하므로 주석 처리
+        # self._randomize_dolly_pose()
+        # Dolly의 조명을 무작위로 설정 -> 빨간색으로 고정, 주석 처리
+        # self._randomize_dolly_light()
+        # 소품 위치를 무작위로 설정 -> 소품을 사용하지 않으므로 주석 처리
+        # self._randomize_prop_poses()
+        # 환경 전환 -> 환경을 고정해야 하므로 주석 처리 필요
+        # if self._frame_counter % self._env_interval == 0:
+            # self._load_next_env()
+
+
+
+
+    # 타임라인 이벤트가 발생할 때 호출
+    # Carter 로봇과 Dolly 사이의 거리를 계산하여 특정 조건(거리)이 충족되면 SDG(Synthetic Data Generation, 합성 데이터 생성)를 시작
     def _on_timeline_event(self, e: carb.events.IEvent):
+        # Carter 로봇의 현재 위치를 가져옴
         carter_loc = self._carter_chassis.GetAttribute("xformOp:translate").Get()
+        # Dolly의 현재 위치를 가져옴
         dolly_loc = self._dolly.GetAttribute("xformOp:translate").Get()
+        # Carter와 Dolly 사이의 거리를 2D 평면에서 계산 (Z축 무시)
         dist = (Gf.Vec2f(dolly_loc[0], dolly_loc[1]) - Gf.Vec2f(carter_loc[0], carter_loc[1])).GetLength()
+
+        # Carter와 Dolly 사이의 거리가 특정 거리(_trigger_distance)보다 짧아졌을 때 SDG 시작
         if dist < self._trigger_distance:
             print(f"[NavSDGDemo] Starting SDG for frame no. {self._frame_counter}")
+            # 타임라인 일시정지
             self._timeline.pause()
+            # 타임라인 이벤트 구독 해제
             self._timeline_sub.unsubscribe()
+
+            # 스크립트 편집기에서 실행 중인 경우 비동기 방식으로 SDG 수행
             if self._is_running_in_script_editor():
                 import asyncio
-
+                # 비동기 SDG 실행
                 task = asyncio.ensure_future(self._run_sdg_async())
                 task.add_done_callback(self._on_sdg_done)
             else:
+                # 동기 방식으로 SDG 실행
                 self._run_sdg()
+
+                # 다음 프레임 설정
                 self._setup_next_frame()
 
 
+
+
+'''
 ENV_URLS = [
     
     "/Isaac/Environments/Grid/default_environment.usd",
     "/Isaac/Environments/Simple_Warehouse/warehouse.usd",
     "/Isaac/Environments/Grid/gridroom_black.usd",
 ]
+'''
 
 
-ENV_INTERVAL = 3
+
+
+# 총 처리할 프레임 수 
 NUM_FRAMES = 9
+# 임시 렌더링 제품을 사용할지 여부
 USE_TEMP_RP = True
-
+# 시뮬레이션 결과가 저장될 출력 디렉토리를 설정 (현재 작업 디렉토리 내 '_out_nav_sdg_demo' 폴더)
 out_dir = os.path.join(os.getcwd(), "_out_nav_sdg_demo", "")
+# NavSDGDemo 클래스의 인스턴스를 생성하여 시뮬레이션 준비
 nav_demo = NavSDGDemo()
+
+
+# 환경 전환 간격
+# ENV_INTERVAL = 3
+
+
+
+
+# 시뮬레이션 시작
 nav_demo.start(
+    # 처리할 총 프레임 수 전달
     num_frames=NUM_FRAMES,
+    # 시뮬레이션 결과 저장 디렉토리
     out_dir=out_dir,
-    env_urls=ENV_URLS,
-    env_interval=ENV_INTERVAL,
+    # 임시 렌더링 제품을 사용할지 여부
     use_temp_rp=USE_TEMP_RP,
-    seed=22,
+
+
+    # 환경 전환 관련 변수들 주석 처리
+    # 환경 URL 리스트
+    # env_urls=ENV_URLS,
+    # 환경 전환 간격
+    # env_interval=ENV_INTERVAL,
+    # 난수 생성 시드 -> 환경 무작위화가 필요 없으므로 주석 처리
+    # seed=22,
 )
