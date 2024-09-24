@@ -1,0 +1,73 @@
+import omni.timeline
+import omni.usd
+from pxr import Gf
+
+class RobotNavigation:
+    ROBOT_PATH = "/robot_assembly"
+    TARGET_PATH = "/Lighting_Tower/Lighting_Tower_03"
+
+    def __init__(self):
+        self._robot = None
+        self._target = None
+        self._timeline = None
+        self._timeline_sub = None
+        self._trigger_distance = 2.0  
+
+    def start(self):
+        # 스테이지 및 프림 불러오기
+        self._stage = omni.usd.get_context().get_stage()
+        self._robot = self._stage.GetPrimAtPath(self.ROBOT_PATH)
+        self._target = self._stage.GetPrimAtPath(self.TARGET_PATH)
+
+        if not self._robot or not self._target:
+            raise Exception(f"Could not find robot or target in the specified paths: {self.ROBOT_PATH}, {self.TARGET_PATH}")
+
+        # 타임라인 시작
+        self._timeline = omni.timeline.get_timeline_interface()
+        self._timeline.play()
+        print("Timeline started")
+        # 타임라인 이벤트 구독
+        self._timeline_sub = self._timeline.get_timeline_event_stream().create_subscription_to_pop_by_type(
+            int(omni.timeline.TimelineEventType.CURRENT_TIME_TICKED), self._on_timeline_event
+        )
+        print("Subscribed to timeline events")
+
+    def _move_robot_towards_target(self):
+        # 로봇과 타겟 위치 가져오기
+        robot_loc = self._robot.GetAttribute("xformOp:translate").Get()
+        c= self._target.GetAttribute("xformOp:translate").Get()
+
+        print(f"Robot location: {robot_loc}, Target location: {target_loc}")
+
+        # 목표를 향한 방향 벡터 계산
+        direction = Gf.Vec3d(target_loc[0] - robot_loc[0], target_loc[1] - robot_loc[1], target_loc[2] - robot_loc[2])
+        normalized_direction = direction.GetNormalized()  # 방향 벡터 정규화
+
+        # 이동 속도 조금 낮춤
+        new_loc = robot_loc + normalized_direction * 100.0 # 이동 속도 100.0으로 조절 
+
+        print(f"New Robot location: {new_loc}")
+
+        # 로봇의 위치 업데이트
+        self._robot.GetAttribute("xformOp:translate").Set(new_loc)
+
+    def _on_timeline_event(self, e):
+        print("Timeline event triggered")
+        # 로봇과 타겟 위치 가져오기
+        robot_loc = self._robot.GetAttribute("xformOp:translate").Get()
+        target_loc = self._target.GetAttribute("xformOp:translate").Get()
+
+        # 로봇과 목표 타워 사이의 거리 계산
+        dist = (Gf.Vec3d(target_loc) - Gf.Vec3d(robot_loc)).GetLength()
+
+        # 목표에 도달했는지 확인
+        if dist < self._trigger_distance:
+            print("Robot reached the target.")
+            self._timeline.pause()
+            self._timeline_sub.unsubscribe()
+        else:
+            self._move_robot_towards_target()
+
+# 로봇 내비게이션 시작
+nav_demo = RobotNavigation()
+nav_demo.start()
