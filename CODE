@@ -18,7 +18,7 @@ from pxr import Gf, PhysxSchema, UsdGeom, UsdLux, UsdPhysics
 
 class NavSDGDemo:
     # Nova Carter라는 자율주행 또는 로봇 차량의 네비게이션 테스트를 위한 USD 파일 경로
-    CARTER_URL = "/Isaac/Samples/Replicator/OmniGraph/nova_carter_nav_only.usd"
+    CARTER_URL = "/assembly"
     # Dolly(물리적 상호작용을 할 수 있는 물체)라는 물체의 물리적 모델을 포함하는 USD 파일 경로
     DOLLY_URL = "/Isaac/Props/Dolly/dolly_physics.usd"
     # Nova Carter 차량에 장착된 왼쪽 및 오른쪽 카메라의 경로
