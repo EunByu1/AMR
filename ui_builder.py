@@ -68,7 +68,7 @@ class UIBuilder:
         world = World.instance()
         
         # USD File Path 
-        usd_path = r"C:/Users/kime/Desktop/Yard/Yard_Layout_Design_Ground_sky(700x1100)_v7.3usd.usd"
+        usd_path = r"usd path"
         
         # Open the USD file as the current stage, replacing any existing stage contents
         omni.usd.get_context().open_stage(usd_path)
